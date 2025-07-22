@@ -83,21 +83,16 @@ if uploaded is not None:
     st.write("### Transaction counts")
     st.bar_chart(counts)
 
-    # b) Top 5 reasons + Other
+    # b) Top 5 flag reasons (highest → lowest)
     reason_counts = results['flag_reason'].value_counts()
     top5 = reason_counts.nlargest(5)
     other = reason_counts.iloc[5:].sum()
     reason_summary = pd.concat([top5, pd.Series({'Other': other})])
+    reason_summary = reason_summary.sort_values(ascending=False)
     st.write("### Top 5 flag reasons")
     st.bar_chart(reason_summary)
 
-    # c) Fraud probability histogram
-    bins = pd.cut(results['fraud_prob'], bins=10)
-    hist = bins.value_counts().sort_index()
-    st.write("### Fraud probability histogram")
-    st.bar_chart(hist)
-
-    # d) Summary metrics
+    # c) Summary metrics
     total    = len(results)
     flagged  = counts.get('Flagged', 0)
     flag_pct = round(100 * flagged / total, 1)
