@@ -79,7 +79,7 @@ def annotate_reasons(X, raw_df):
 
 # ─── 4) Streamlit UI ────────────────────────────────────────────────────
 st.title("🚀 VR Fraud Detector Demo")
-st.write("Upload your VR transactions CSV; get back fraud flags, reasons, and charts.")
+st.write("Upload your VR transactions CSV; get fraud flags, reasons, and charts.")
 
 uploaded = st.file_uploader("Choose a CSV file", type="csv")
 if uploaded is not None:
@@ -105,19 +105,35 @@ if uploaded is not None:
 
     # 4) Interactive charts
     st.write("## Visual summary")
-    st.write("### Flagged vs. Non-flagged")
-    st.bar_chart(
-        results['is_fraud']
-               .map({0:'Normal',1:'Flagged'})
-               .value_counts()
-    )
 
-    st.write("### Breakdown by reason")
-    st.bar_chart(results['flag_reason'].value_counts())
+    # a) Flagged vs. Non-flagged
+    counts = results['is_fraud'].value_counts().sort_index()
+    counts.index = counts.index.map({0:'Normal', 1:'Flagged'})
+    st.write("### Transaction counts")
+    st.bar_chart(counts)
 
-    st.write("### Fraud probability distribution")
-    st.line_chart(
-        results['fraud_prob']
-               .value_counts()
-               .sort_index()
-    )
+    # b) Top 5 flag reasons (+Other)
+    reason_counts = results['flag_reason'].value_counts()
+    top5 = reason_counts.nlargest(5)
+    other = reason_counts.iloc[5:].sum()
+    reason_summary = top5.append(pd.Series({'Other': other}))
+    st.write("### Top 5 flag reasons")
+    st.bar_chart(reason_summary)
+
+    # c) Fraud probability histogram
+    bins = pd.cut(results['fraud_prob'], bins=10)
+    hist = bins.value_counts().sort_index()
+    st.write("### Fraud probability histogram")
+    st.bar_chart(hist)
+
+    # d) Summary metrics table
+    total   = len(results)
+    flagged = counts.get('Flagged', 0)
+    flag_rate = round(100 * flagged / total, 1)
+    avg_prob  = round(results['fraud_prob'].mean(), 3)
+    summary_df = pd.DataFrame({
+        "Metric": ["Total txns", "Flagged txns", "Flag rate (%)", "Avg fraud_prob"],
+        "Value": [total, flagged, flag_rate, avg_prob]
+    })
+    st.write("### Summary metrics")
+    st.table(summary_df)
