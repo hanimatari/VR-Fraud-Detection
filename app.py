@@ -73,9 +73,11 @@ if uploaded:
     st.write("### Raw preview", raw.head())
 
     X    = preprocess(raw)
-    keep = ['market_value','price_difference',
-            'user_transaction_count','is_overpriced',
-            'is_repeating_user','is_withdrawal','suspicious_withdrawal']
+    keep = [
+        'market_value','price_difference',
+        'user_transaction_count','is_overpriced',
+        'is_repeating_user','is_withdrawal','suspicious_withdrawal'
+    ]
     st.write("### Engineered preview", X[keep].head())
 
     results = annotate_reasons(X, raw)
@@ -86,25 +88,33 @@ if uploaded:
                        file_name="vr_fraud_with_reasons.csv",
                        mime="text/csv")
 
-    # Visual summary
+    # ─── Visual summary ────────────────────────────────────────────
     st.write("## Visual summary")
 
-    labels = results['is_fraud'].map({0:'Normal',1:'Flagged'}).value_counts()
+    # 1) True counts for 0/1
+    raw_counts = results['is_fraud'].value_counts().sort_index()
+    normal_cnt = int(raw_counts.get(0, 0))
+    flagged_cnt = int(raw_counts.get(1, 0))
+    counts_named = pd.Series({'Normal': normal_cnt, 'Flagged': flagged_cnt})
     st.write("### Transaction counts")
-    st.bar_chart(labels)
+    st.bar_chart(counts_named)
 
+    # 2) Top 5 flag reasons + Other
     rc = results['flag_reason'].value_counts()
     top5 = rc.nlargest(5)
     other = rc.iloc[5:].sum()
-    reason_summary = pd.concat([top5, pd.Series({'Other': other})]).sort_values(ascending=False)
+    reason_summary = pd.concat([top5, pd.Series({'Other': other})])
+    reason_summary = reason_summary.sort_values(ascending=False)
     st.write("### Top 5 flag reasons")
     st.bar_chart(reason_summary)
 
-    total   = len(results)
-    flagged = int(labels.get('Flagged',0))
-    summary = pd.DataFrame({
-        "Metric": ["Total txns","Flagged txns","Flag rate (%)","Avg fraud_prob"],
-        "Value":  [total, flagged, round(100*flagged/total,1), round(results['fraud_prob'].mean(),3)]
+    # 3) Summary metrics table
+    total = normal_cnt + flagged_cnt
+    flag_rate = round(100 * flagged_cnt / total, 1) if total>0 else 0
+    avg_prob = round(results['fraud_prob'].mean(), 3)
+    summary_df = pd.DataFrame({
+        "Metric":       ["Total txns","Flagged txns","Flag rate (%)","Avg fraud_prob"],
+        "Value":        [ total,     flagged_cnt,    flag_rate,      avg_prob   ]
     })
     st.write("### Summary metrics")
-    st.table(summary)
+    st.table(summary_df)
