@@ -38,7 +38,6 @@ def annotate_reasons(X, raw_df):
     y_pred  = model.predict(X)
     y_proba = model.predict_proba(X)[:,1].round(3)
 
-    # 95th‐percentile cash‐out threshold
     cash_threshold = X['price_paid'].quantile(0.95)
 
     reasons = []
@@ -74,7 +73,7 @@ if uploaded:
     raw = pd.read_csv(uploaded)
     st.write("### Raw preview", raw.head())
 
-    # Engineer
+    # Engineer features
     X = preprocess(raw)
     engineered_cols = [
         'market_value','price_difference',
@@ -83,17 +82,17 @@ if uploaded:
     ]
     st.write("### Engineered preview", X[engineered_cols].head())
 
-    # Annotate
+    # Annotate & predict
     results = annotate_reasons(X, raw)
     st.write("### Annotated results", results.head())
 
-    # Download
+    # Download annotated CSV
     csv = results.to_csv(index=False)
     st.download_button("⬇️ Download annotated CSV", csv,
                        file_name="vr_fraud_with_reasons.csv",
                        mime="text/csv")
 
-    # Visual summary
+    # ─── Visual summary ────────────────────────────────────────────────
     st.write("## Visual summary")
 
     # 1) Transaction counts
@@ -104,16 +103,17 @@ if uploaded:
     st.write("### Transaction counts")
     st.bar_chart(counts_named)
 
-    # 2) Top 5 flag reasons (including “Not suspicious”)
+    # 2) Top 5 flag reasons (including “Not suspicious”; omit Other if zero)
     rc = results['flag_reason'].value_counts()
-    top5 = rc.nlargest(5)
-    other = rc.iloc[5:].sum() if len(rc)>5 else 0
-    reason_summary = pd.concat([top5, pd.Series({'Other': other})]) \
-                      .sort_values(ascending=False)
+    top5 = rc.nlargest(5).copy()
+    other_count = rc.iloc[5:].sum()
+    if other_count > 0:
+        top5['Other'] = other_count
+    reason_summary = top5.sort_values(ascending=False)
     st.write("### Top 5 flag reasons")
     st.bar_chart(reason_summary)
 
-    # 3) Summary metrics
+    # 3) Summary metrics table
     total    = normal_cnt + flagged_cnt
     flag_pct = round(100 * flagged_cnt / total, 1) if total else 0
     avg_prob = round(results['fraud_prob'].mean(), 3)
