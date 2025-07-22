@@ -7,6 +7,9 @@ def load_model():
     with open('rf_model.pkl','rb') as f:
         return pickle.load(f)
 model = load_model()
+# tell us exactly which columns the RF expects
+FEATURE_NAMES = list(model.feature_names_in_)
+
 FEATURE_NAMES = list(model.feature_names_in_)
 
 def preprocess(raw_df):
