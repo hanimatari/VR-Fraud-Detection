@@ -112,7 +112,7 @@ summary = pd.DataFrame({
 st.write("### Summary metrics")
 st.table(summary)
 
-# ─── AI‐Generated Narrative via legacy API ───────────────────────────────
+# ─── AI‐Generated Narrative via Chat API ────────────────────────────────
 st.write("## AI Insight Summary")
 
 prompt = (
@@ -122,21 +122,20 @@ prompt = (
     "Write a concise 3-sentence summary for a risk officer."
 )
 
-# show the exact prompt
+# (optional) show the prompt
 st.text("🔍 Prompt:")
 st.code(prompt, language="")
 
 try:
-    response = openai.Completion.create(
-        model="text-davinci-003",
-        prompt=prompt,
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role":"user","content": prompt}],
         max_tokens=150,
-        temperature=0.7
+        temperature=0.7,
     )
-    summary_text = response.choices[0].text.strip()
+    summary_text = response.choices[0].message.content.strip()
     st.markdown(f"> {summary_text}")
+
 except Exception as e:
     st.error(f"⚠️ OpenAI call failed: {type(e).__name__}: {e}")
-    import traceback
-    st.text(traceback.format_exc())
-
+    import traceback; st.text(traceback.format_exc())
