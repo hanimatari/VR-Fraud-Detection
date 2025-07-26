@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS uploads (
 """)
 conn.commit()
 
-# bootstrap default admin
+# bootstrap default admin if empty
 if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
     default_pw = "admin123"
     h = hashlib.sha256(default_pw.encode()).hexdigest()
@@ -84,7 +84,7 @@ def preprocess(df):
     if "market_value" not in df:
         df["market_value"] = df["price_paid"] * 1.0
     df["price_difference"]       = df["price_paid"] - df["market_value"]
-    df["is_overpriced"]          = (df["price_difference"]/df["market_value"]) > 0.3
+    df["is_overpriced"]          = (df["price_difference"] / df["market_value"]) > 0.3
     df["user_transaction_count"] = df.groupby("user_id")["price_paid"].transform("count")
     df["is_repeating_user"]      = df["user_transaction_count"] > 1
     df["is_withdrawal"]          = df["type"].isin(["CASH_OUT","WITHDRAW"])
@@ -103,7 +103,7 @@ def annotate(raw):
     thresh = X["price_paid"].quantile(0.95)
 
     reasons = []
-    for i, row in X.iterrows():
+    for i,row in X.iterrows():
         if pred[i] == 0:
             reasons.append("Not suspicious")
         elif row["suspicious_withdrawal"]:
@@ -150,13 +150,13 @@ if page == "Admin Dashboard":
                     st.error("Username already exists")
 
     st.subheader("Existing users")
-    users = c.execute("SELECT username, is_admin FROM users").fetchall()
-    df_u = pd.DataFrame(users, columns=["username","is_admin"])
+    users = c.execute("SELECT username,is_admin FROM users").fetchall()
+    df_u  = pd.DataFrame(users, columns=["username","is_admin"])
     st.dataframe(df_u, use_container_width=True)
 
     st.subheader("Upload history")
     logs = c.execute(
-      "SELECT filename, uploaded_by, timestamp FROM uploads ORDER BY id DESC"
+      "SELECT filename,uploaded_by,timestamp FROM uploads ORDER BY id DESC"
     ).fetchall()
     df_l = pd.DataFrame(logs, columns=["filename","user","when"])
     st.dataframe(df_l, use_container_width=True)
