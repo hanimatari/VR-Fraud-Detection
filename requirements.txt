@@ -1,4 +1,7 @@
-streamlit
 pandas
+numpy
 scikit-learn
+xgboost
+matplotlib
+streamlit
 openai>=0.27.0
