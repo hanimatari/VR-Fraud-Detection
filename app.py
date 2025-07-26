@@ -7,19 +7,19 @@ def load_model():
     with open('model.pkl', 'rb') as f:
         return pickle.load(f)
 
-model = load_model()
+model    = load_model()
 features = list(model.feature_names_in_)
 explainer = shap.TreeExplainer(model)
 
 def preprocess(df):
     if 'market_value' not in df:
         df['market_value'] = df['price_paid'] * 1.0
-    df['price_diff']   = df['price_paid'] - df['market_value']
-    df['overpriced']   = (df['price_diff'] / df['market_value']) > 0.3
-    df['trans_count']  = df.groupby('user_id')['price_paid'].transform('count')
-    df['repeat_user']  = df['trans_count'] > 1
-    df['withdraw']     = df['type'].isin(['CASH_OUT', 'WITHDRAW'])
-    df['suspicious']   = df['withdraw'] & df['overpriced']
+    df['price_difference']       = df['price_paid'] - df['market_value']
+    df['is_overpriced']          = (df['price_difference'] / df['market_value']) > 0.3
+    df['user_transaction_count'] = df.groupby('user_id')['price_paid'].transform('count')
+    df['is_repeating_user']      = df['user_transaction_count'] > 1
+    df['is_withdrawal']          = df['type'].isin(['CASH_OUT', 'WITHDRAW'])
+    df['suspicious_withdrawal']  = df['is_withdrawal'] & df['is_overpriced']
     df = df.drop(['user_id', 'nameDest'], axis=1, errors='ignore')
     df = pd.get_dummies(df, columns=['type'], drop_first=True)
     for c in features:
@@ -28,22 +28,22 @@ def preprocess(df):
     return df[features]
 
 def annotate(raw):
-    X = preprocess(raw.copy())
-    pred = model.predict(X)
-    prob = model.predict_proba(X)[:,1].round(3)
+    X      = preprocess(raw.copy())
+    pred   = model.predict(X)
+    prob   = model.predict_proba(X)[:,1].round(3)
     thresh = X['price_paid'].quantile(0.95)
 
     reasons = []
     for i, row in X.iterrows():
         if pred[i] == 0:
             reasons.append("Not suspicious")
-        elif row['suspicious']:
+        elif row['suspicious_withdrawal']:
             reasons.append("Overpriced + withdrawal")
-        elif row['overpriced']:
+        elif row['is_overpriced']:
             reasons.append("Price > market by 30%")
-        elif row['repeat_user']:
-            reasons.append(f"Repeat user ({int(row['trans_count'])} txns)")
-        elif row['withdraw'] and row['price_paid'] > thresh:
+        elif row['is_repeating_user']:
+            reasons.append(f"Repeat user ({int(row['user_transaction_count'])} txns)")
+        elif row['is_withdrawal'] and row['price_paid'] > thresh:
             reasons.append(f"Large cash-out (>p95: {int(thresh)})")
         else:
             reasons.append("Other model signal")
@@ -53,7 +53,7 @@ def annotate(raw):
     out['fraud_prob']       = prob
     out['flag_reason']      = reasons
     out['market_value']     = X['market_value'].values
-    out['price_diff']       = X['price_diff'].values
+    out['price_difference'] = X['price_difference'].values
     return out, X
 
 st.title("VR Fraud Detector")
@@ -69,15 +69,18 @@ if up:
     res, X_shap = annotate(df)
     st.write("Results", res.head())
 
-    st.download_button("Download CSV",
+    st.download_button(
+        "Download CSV",
         res.to_csv(index=False),
-        "results.csv","text/csv")
+        "results.csv",
+        "text/csv"
+    )
 
-    counts = res['is_fraud'].value_counts().rename({0:'normal',1:'fraud'})
+    counts = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
     st.write("### Transaction counts")
     st.bar_chart(counts)
 
-    rc = res['flag_reason'].value_counts()
+    rc   = res['flag_reason'].value_counts()
     top5 = rc.nlargest(5).copy()
     other = rc.iloc[5:].sum()
     if other>0:
@@ -85,31 +88,32 @@ if up:
     st.write("### Top 5 flag reasons")
     st.bar_chart(top5)
 
-    total = len(res)
-    flagged = int(counts.get('fraud',0))
-    rate = round(100*flagged/total,1) if total else 0
-    avgp = round(res['fraud_prob'].mean(), 3)
+    total  = len(res)
+    flagged = int(counts.get('Flagged',0))
+    rate    = round(100*flagged/total,1) if total else 0
+    avgp    = round(res['fraud_prob'].mean(), 3)
     summary = pd.DataFrame({
-      'Metric':['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
-      'Value':[total, flagged, rate, avgp]
+      'Metric': ['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
+      'Value':  [total, flagged, rate, avgp]
     })
     st.write("### Summary metrics")
     st.table(summary)
 
     # —— SHAP explainability ——
-    shap_values = explainer.shap_values(X_shap)[1]
+    shap_values  = explainer.shap_values(X_shap)[1]
     flagged_inds = [i for i,v in enumerate(res['is_fraud']) if v==1]
+
     if flagged_inds:
         choice = st.selectbox("Pick a flagged transaction to explain", flagged_inds)
         row_vals = shap_values[choice]
-        # build DataFrame with the exact same length
-        df_shap = pd.DataFrame({
-          'feature': X_shap.columns,
-          'shap_value': row_vals
-        })
-        df_shap['abs_val'] = df_shap['shap_value'].abs()
-        top3 = df_shap.nlargest(3,'abs_val').set_index('feature')['shap_value']
+
+        # Build a dict of exactly matching length
+        shap_dict = {features[i]: float(row_vals[i]) for i in range(len(features))}
+        # pick top 3 by absolute contribution
+        top3 = dict(sorted(shap_dict.items(),
+                           key=lambda kv: abs(kv[1]),
+                           reverse=True)[:3])
         st.write("### Why it was flagged")
-        st.bar_chart(top3)
+        st.bar_chart(pd.Series(top3))
     else:
         st.write("No flagged transactions to explain.")
