@@ -1,16 +1,19 @@
 import streamlit as st
 import pandas as pd
 import pickle
-import shap
+import openai
+
+# ─── Config ────────────────────────────────────────────────────────────────
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 def load_model():
     with open('model.pkl', 'rb') as f:
         return pickle.load(f)
 
-model = load_model()
-explainer = shap.TreeExplainer(model)
+model    = load_model()
 features = list(model.feature_names_in_)
 
+# ─── Preprocess & Annotate ────────────────────────────────────────────────
 def preprocess(df):
     if 'market_value' not in df:
         df['market_value'] = df['price_paid'] * 1.0
@@ -28,10 +31,11 @@ def preprocess(df):
     return df[features]
 
 def annotate(raw):
-    X = preprocess(raw.copy())
-    pred = model.predict(X)
-    prob = model.predict_proba(X)[:,1].round(3)
+    X      = preprocess(raw.copy())
+    pred   = model.predict(X)
+    prob   = model.predict_proba(X)[:,1].round(3)
     thresh = X['price_paid'].quantile(0.95)
+
     reasons = []
     for i, r in X.iterrows():
         if pred[i] == 0:
@@ -46,61 +50,73 @@ def annotate(raw):
             reasons.append(f"Large cash-out (>p95: {int(thresh)})")
         else:
             reasons.append("Other model signal")
+
     out = raw.reset_index(drop=True)
-    out['is_fraud'] = pred
-    out['fraud_prob'] = prob
-    out['flag_reason'] = reasons
-    out['market_value'] = X['market_value'].values
+    out['is_fraud']         = pred
+    out['fraud_prob']       = prob
+    out['flag_reason']      = reasons
+    out['market_value']     = X['market_value'].values
     out['price_difference'] = X['price_difference'].values
-    return out, X
+    return out
 
+# ─── Streamlit App ────────────────────────────────────────────────────────
 st.title("VR Fraud Detector")
+st.write("Upload your transactions CSV, get flags + an AI‐generated summary.")
+
 up = st.file_uploader("Upload CSV", type="csv")
+if not up:
+    st.stop()
 
-if up:
-    df = pd.read_csv(up)
-    st.write("Raw data", df.head())
+df = pd.read_csv(up)
+st.write("### Raw data preview", df.head())
 
-    feats = preprocess(df.copy())
-    st.write("Engineered features", feats.head())
+# Features & results
+X_feat = preprocess(df.copy())
+st.write("### Engineered features preview", X_feat.head())
 
-    res, X_shap = annotate(df)
-    st.write("Results", res.head())
+res = annotate(df)
+st.write("### Annotated results preview", res.head())
 
-    st.download_button("Download CSV", res.to_csv(index=False), "results.csv", "text/csv")
+# Download
+csv = res.to_csv(index=False)
+st.download_button("⬇️ Download annotated CSV", csv,
+                   "vr_fraud_with_reasons.csv","text/csv")
 
-    counts = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
-    st.write("Transactions counts")
-    st.bar_chart(counts)
+# Summary charts
+counts = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
+st.write("### Transaction counts")
+st.bar_chart(counts)
 
-    rc = res['flag_reason'].value_counts()
-    top5 = rc.nlargest(5).copy()
-    other = rc.iloc[5:].sum()
-    if other > 0:
-        top5['Other'] = other
-    st.write("Top 5 flag reasons")
-    st.bar_chart(top5)
+rc   = res['flag_reason'].value_counts()
+top5 = rc.nlargest(5).copy()
+other = rc.iloc[5:].sum()
+if other>0: top5['Other'] = other
+st.write("### Top 5 flag reasons")
+st.bar_chart(top5)
 
-    total = len(res)
-    flagged = int(counts.get('Flagged',0))
-    rate = round(100 * flagged / total, 1) if total else 0
-    avgp = round(res['fraud_prob'].mean(), 3)
-    summary = pd.DataFrame({
-        'Metric':['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
-        'Value':[total, flagged, rate, avgp]
-    })
-    st.write("Summary metrics")
-    st.table(summary)
+total  = len(res)
+flagged= int(counts.get('Flagged',0))
+rate   = round(100*flagged/total,1) if total else 0
+avgp   = round(res['fraud_prob'].mean(),3)
+summary = pd.DataFrame({
+    'Metric':['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
+    'Value':[total, flagged, rate, avgp]
+})
+st.write("### Summary metrics")
+st.table(summary)
 
-    # SHAP explainability
-    shap_values = explainer.shap_values(X_shap)[1]
-    flagged_inds = [i for i,v in enumerate(res['is_fraud']) if v==1]
-    if flagged_inds:
-        choice = st.selectbox("Pick a flagged transaction to explain", flagged_inds)
-        row_vals = shap_values[choice]
-        shap_dict = dict(zip(X_shap.columns, row_vals))
-        top3 = dict(sorted(shap_dict.items(), key=lambda kv: abs(kv[1]), reverse=True)[:3])
-        st.write("Why it was flagged")
-        st.bar_chart(pd.Series(top3))
-    else:
-        st.write("No flagged transactions to explain.")
+# ─── AI‐Generated Narrative ────────────────────────────────────────────────
+st.write("## AI Insight Summary")
+prompt = f"""
+I have {total} virtual-reality asset transactions. \
+{flagged} were flagged as potentially fraudulent. \
+The top reasons are: {', '.join(top5.index.tolist())}. \
+Write a concise 3-sentence summary for a risk officer.
+"""
+response = openai.ChatCompletion.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role":"user","content":prompt}],
+    max_tokens=150
+)
+summary_text = response.choices[0].message.content.strip()
+st.markdown(f"> {summary_text}")
