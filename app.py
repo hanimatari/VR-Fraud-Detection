@@ -100,23 +100,25 @@ rate   = round(100*flagged/total,1) if total else 0
 avgp   = round(res['fraud_prob'].mean(),3)
 summary = pd.DataFrame({
     'Metric':['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
-    'Value':[total, flagged, rate, avgp]
+    'Value' :[total, flagged, rate, avgp]
 })
 st.write("### Summary metrics")
 st.table(summary)
 
-# ─── AI‐Generated Narrative ────────────────────────────────────────────────
+# ─── AI‐Generated Narrative via legacy API ────────────────────────────────
 st.write("## AI Insight Summary")
-prompt = f"""
-I have {total} virtual-reality asset transactions. \
-{flagged} were flagged as potentially fraudulent. \
-The top reasons are: {', '.join(top5.index.tolist())}. \
-Write a concise 3-sentence summary for a risk officer.
-"""
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=[{"role":"user","content":prompt}],
-    max_tokens=150
+prompt = (
+    f"I have {total} virtual-reality asset transactions. "
+    f"{flagged} were flagged as potentially fraudulent. "
+    f"The top reasons are: {', '.join(top5.index.tolist())}. "
+    "Write a concise 3-sentence summary for a risk officer."
 )
-summary_text = response.choices[0].message.content.strip()
+
+response = openai.Completion.create(
+    engine="text-davinci-003",
+    prompt=prompt,
+    max_tokens=150,
+    temperature=0.7,
+)
+summary_text = response.choices[0].text.strip()
 st.markdown(f"> {summary_text}")
