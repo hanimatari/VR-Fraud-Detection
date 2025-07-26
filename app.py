@@ -52,7 +52,6 @@ def annotate(raw):
     out['is_fraud']         = pred
     out['fraud_prob']       = prob
     out['flag_reason']      = reasons
-    # we also need market_value & price_diff in the download if desired
     out['market_value']     = X['market_value'].values
     out['price_diff']       = X['price_diff'].values
     return out, X
@@ -102,17 +101,14 @@ if up:
     flagged_inds = [i for i,v in enumerate(res['is_fraud']) if v==1]
     if flagged_inds:
         choice = st.selectbox("Pick a flagged transaction to explain", flagged_inds)
-        # build a small DataFrame of feature vs shap value
         row_vals = shap_values[choice]
-        df_shap  = pd.DataFrame({
-          'feature': features,
+        # build DataFrame with the exact same length
+        df_shap = pd.DataFrame({
+          'feature': X_shap.columns,
           'shap_value': row_vals
         })
         df_shap['abs_val'] = df_shap['shap_value'].abs()
-        top3 = (
-          df_shap.nlargest(3,'abs_val')
-                 .set_index('feature')['shap_value']
-        )
+        top3 = df_shap.nlargest(3,'abs_val').set_index('feature')['shap_value']
         st.write("### Why it was flagged")
         st.bar_chart(top3)
     else:
