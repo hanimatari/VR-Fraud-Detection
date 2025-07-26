@@ -4,8 +4,8 @@ import pickle
 import openai
 import traceback
 
-# DEBUGGING: confirm client version & key
-import openai, streamlit as st
+# ─── DEBUG: confirm client & key ──────────────────────────────────────────
+import openai, streamlit as st  # make sure these are at top of file
 st.write("⚙️ openai version:", openai.__version__)
 st.write("🔑 API key loaded:", bool(openai.api_key))
 
@@ -112,7 +112,7 @@ summary = pd.DataFrame({
 st.write("### Summary metrics")
 st.table(summary)
 
-# ─── AI‐Generated Narrative via legacy API ────────────────────────────────
+# ─── AI‐Generated Narrative via legacy API ───────────────────────────────
 st.write("## AI Insight Summary")
 
 prompt = (
@@ -122,26 +122,21 @@ prompt = (
     "Write a concise 3-sentence summary for a risk officer."
 )
 
-# show us the prompt, just to be 100% sure
+# show the exact prompt
 st.text("🔍 Prompt:")
 st.code(prompt, language="")
 
 try:
     response = openai.Completion.create(
-        model="text-davinci-003",   # must be "model=", not "engine="
+        model="text-davinci-003",
         prompt=prompt,
         max_tokens=150,
-        temperature=0.7,
+        temperature=0.7
     )
     summary_text = response.choices[0].text.strip()
     st.markdown(f"> {summary_text}")
-
 except Exception as e:
     st.error(f"⚠️ OpenAI call failed: {type(e).__name__}: {e}")
-    st.text("Full traceback:")
+    import traceback
     st.text(traceback.format_exc())
-    temperature=0.7,
-)
-summary_text = response.choices[0].text.strip()
-st.markdown(f"> {summary_text}")
 
