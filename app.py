@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import pickle
 import openai
+import traceback
 
 # DEBUGGING: confirm client version & key
 import openai, streamlit as st
@@ -113,6 +114,7 @@ st.table(summary)
 
 # ─── AI‐Generated Narrative via legacy API ────────────────────────────────
 st.write("## AI Insight Summary")
+
 prompt = (
     f"I have {total} virtual-reality asset transactions. "
     f"{flagged} were flagged as potentially fraudulent. "
@@ -120,10 +122,24 @@ prompt = (
     "Write a concise 3-sentence summary for a risk officer."
 )
 
-response = openai.Completion.create(
-    model="text-davinci-003",
-    prompt=prompt,
-    max_tokens=150,
+# show us the prompt, just to be 100% sure
+st.text("🔍 Prompt:")
+st.code(prompt, language="")
+
+try:
+    response = openai.Completion.create(
+        model="text-davinci-003",   # must be "model=", not "engine="
+        prompt=prompt,
+        max_tokens=150,
+        temperature=0.7,
+    )
+    summary_text = response.choices[0].text.strip()
+    st.markdown(f"> {summary_text}")
+
+except Exception as e:
+    st.error(f"⚠️ OpenAI call failed: {type(e).__name__}: {e}")
+    st.text("Full traceback:")
+    st.text(traceback.format_exc())
     temperature=0.7,
 )
 summary_text = response.choices[0].text.strip()
