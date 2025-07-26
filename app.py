@@ -7,7 +7,7 @@ from datetime import datetime
 
 # ─── 0) DB SETUP ──────────────────────────────────────────────────────────
 conn = sqlite3.connect("data.db", check_same_thread=False)
-c = conn.cursor()
+c    = conn.cursor()
 
 c.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS uploads (
 """)
 conn.commit()
 
-# bootstrap default admin if empty
+# bootstrap default admin if no users exist
 if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
     default_pw = "admin123"
     h = hashlib.sha256(default_pw.encode()).hexdigest()
@@ -50,20 +50,20 @@ if not st.session_state.logged_in:
           (user,)
         ).fetchone()
         if row and hashlib.sha256(pwd.encode()).hexdigest() == row[0]:
+            # set up session and let the next rerun take effect
             st.session_state.logged_in = True
             st.session_state.user      = user
             st.session_state.is_admin  = bool(row[1])
-            st.experimental_rerun()
+            st.success("✅ Logged in!")
         else:
             st.error("❌ Invalid credentials")
     st.stop()
 
-# ─── LOGOUT BUTTON ────────────────────────────────────────────────────────
-with st.sidebar:
-    if st.button("🔒 Log out"):
-        for k in ["logged_in","user","is_admin"]:
-            st.session_state.pop(k, None)
-        st.experimental_rerun()
+# ─── LOG OUT ──────────────────────────────────────────────────────────────
+if st.sidebar.button("🔒 Log out"):
+    for k in ["logged_in","user","is_admin"]:
+        st.session_state.pop(k, None)
+    st.experimental_rerun()  # this one *should* exist in any recent Streamlit; you can drop it too if needed
 
 # ─── 2) PAGE NAVIGATION ───────────────────────────────────────────────────
 if st.session_state.is_admin:
@@ -79,7 +79,7 @@ def load_model():
 model    = load_model()
 features = list(model.feature_names_in_)
 
-# ─── 4) FEATURE ENGINEERING & ANNOTATION ─────────────────────────────────
+# ─── 4) PREPROCESS & ANNOTATE ─────────────────────────────────────────────
 def preprocess(df):
     if "market_value" not in df:
         df["market_value"] = df["price_paid"] * 1.0
@@ -145,7 +145,6 @@ if page == "Admin Dashboard":
                     )
                     conn.commit()
                     st.success(f"User `{new_u}` added")
-                    st.experimental_rerun()
                 except sqlite3.IntegrityError:
                     st.error("Username already exists")
 
@@ -165,9 +164,10 @@ if page == "Admin Dashboard":
 if page == "Fraud Detector":
     st.title("🚀 VR Fraud Detector")
     st.write(f"Welcome, **{st.session_state.user}**")
-
     up = st.file_uploader("Upload CSV", type="csv")
+
     if up:
+        # log it
         c.execute(
           "INSERT INTO uploads(filename,uploaded_by,timestamp) VALUES (?,?,?)",
           (up.name, st.session_state.user, datetime.utcnow().isoformat())
@@ -175,43 +175,21 @@ if page == "Fraud Detector":
         conn.commit()
 
         df = pd.read_csv(up)
-        st.subheader("Raw preview")
-        st.dataframe(df.head(), use_container_width=True)
-
+        st.subheader("Raw preview");    st.dataframe(df.head(), use_container_width=True)
         Xf = preprocess(df.copy())
-        st.subheader("Features")
-        st.dataframe(Xf.head(), use_container_width=True)
-
+        st.subheader("Features");       st.dataframe(Xf.head(), use_container_width=True)
         res = annotate(df)
-        st.subheader("Results")
-        st.dataframe(res.head(), use_container_width=True)
+        st.subheader("Results");        st.dataframe(res.head(), use_container_width=True)
 
-        st.download_button(
-            "⬇️ Download results.csv",
-            res.to_csv(index=False),
-            "results.csv",
-            "text/csv"
-        )
+        st.download_button("⬇️ Download results.csv",
+            res.to_csv(index=False), "results.csv", "text/csv")
 
-        st.subheader("Counts")
-        cnts = res["is_fraud"].value_counts().rename({0:"Normal",1:"Flagged"})
-        st.bar_chart(cnts)
-
-        st.subheader("Top 5 reasons")
-        rc    = res["flag_reason"].value_counts()
-        top5  = rc.nlargest(5).copy()
-        other = rc.iloc[5:].sum()
-        if other>0:
-            top5["Not suspicious"] = other
-        st.bar_chart(top5)
-
+        st.subheader("Counts");         st.bar_chart(res["is_fraud"].value_counts().rename({0:"Normal",1:"Flagged"}))
+        st.subheader("Top 5 reasons");  st.bar_chart(res["flag_reason"].value_counts().nlargest(5))
         st.subheader("Summary metrics")
-        tot   = len(res)
-        flg   = int(cnts.get("Flagged",0))
-        rate  = round(100*flg/tot,1)
-        avg_p = round(res["fraud_prob"].mean(),3)
-        df_m  = pd.DataFrame({
-          "Metric": ["Total","Flagged","Flag rate (%)","Avg prob"],
-          "Value" : [tot, flg, rate, avg_p]
+        tot,flg = len(res), int(res["is_fraud"].sum())
+        df_m = pd.DataFrame({
+            "Metric": ["Total txns", "Flagged txns", "Flag rate (%)", "Avg fraud_prob"],
+            "Value":  [tot, flg, round(100*flg/tot,1), round(res["fraud_prob"].mean(),3)]
         })
         st.table(df_m)
