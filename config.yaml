@@ -1,0 +1,14 @@
+credentials:
+  users:
+    cashcatcher_admin:
+      name: Cash Catcher Admin
+      password: $2b$12$7XzQO...   # pre-hashed via bcrypt
+    user1:
+      name: Demo User
+      password: $2b$12$8HdF3...
+cookie:
+  name: my_app_auth
+  key: some-random-string-of-your-own-making
+  expiry_days: 1
+preauthorized:
+  emails: []
