@@ -41,7 +41,7 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     # Load and display logo
-    logo_path = "cash_catchers_logo.png"  # Ensure file exists in the same folder
+    logo_path = "cash_catchers_logo.jpg"  # Ensure file exists in the same folder
     try:
         logo = Image.open(logo_path)
         st.image(logo, width=200)
