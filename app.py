@@ -1,136 +1,211 @@
 import streamlit as st
 import pandas as pd
 import pickle
-import yaml
-import streamlit_authenticator as stauth
+import sqlite3
+import hashlib
+from datetime import datetime
 
-# ─── Auth Setup ────────────────────────────────────────────────────────────
-with open('config.yaml') as file:
-    config = yaml.safe_load(file)
+# ─── 0) DB SETUP ──────────────────────────────────────────────────────────
+# create (or open) a local file `data.db` to hold users & uploads logs
+conn = sqlite3.connect("data.db", check_same_thread=False)
+c = conn.cursor()
 
-authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days'],
-    config.get('preauthorized', {})
+# users table: username (PK), password_hash, is_admin flag
+c.execute("""
+CREATE TABLE IF NOT EXISTS users (
+  username TEXT PRIMARY KEY,
+  password_hash TEXT,
+  is_admin INTEGER
 )
+""")
 
-name, auth_status, username = authenticator.login('Login', 'main')
-if auth_status != True:
-    if auth_status is None:
-        st.warning("Please enter your username and password")
-    else:
-        st.error("Username/password incorrect")
+# uploads table: auto-id, filename, who, when
+c.execute("""
+CREATE TABLE IF NOT EXISTS uploads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename TEXT,
+  uploaded_by TEXT,
+  timestamp TEXT
+)
+""")
+conn.commit()
+
+# If no users exist yet, bootstrap a default admin
+if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+    default_pw = "admin123"
+    h = hashlib.sha256(default_pw.encode()).hexdigest()
+    c.execute(
+      "INSERT INTO users(username,password_hash,is_admin) VALUES (?,?,1)",
+      ("admin", h)
+    )
+    conn.commit()
+
+# ─── 1) LOGIN FLOW ────────────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.title("🔐 VR Fraud Detector — Login")
+    user = st.text_input("Username")
+    pwd  = st.text_input("Password", type="password")
+
+    if st.button("Log in"):
+        row = c.execute(
+          "SELECT password_hash, is_admin FROM users WHERE username=?",
+          (user,)
+        ).fetchone()
+
+        if row and hashlib.sha256(pwd.encode()).hexdigest() == row[0]:
+            st.session_state.logged_in = True
+            st.session_state.user = user
+            st.session_state.is_admin = bool(row[1])
+            st.experimental_rerun()
+        else:
+            st.error("❌ Invalid credentials")
     st.stop()
 
-# ─── Model Loading ─────────────────────────────────────────────────────────
+# ─── 2) PAGE NAVIGATION ────────────────────────────────────────────────────
+if st.session_state.is_admin:
+    page = st.sidebar.selectbox("Go to", ["Admin Dashboard","Fraud Detector"])
+else:
+    page = "Fraud Detector"
+
+# ─── 3) MODEL LOADING ─────────────────────────────────────────────────────
 @st.cache_data
 def load_model():
-    with open('model.pkl', 'rb') as f:
+    with open("model.pkl","rb") as f:
         return pickle.load(f)
-
 model    = load_model()
 features = list(model.feature_names_in_)
 
-# ─── Preprocess & Annotate ────────────────────────────────────────────────
+# ─── 4) FEATURE ENGINEERING & ANNOTATION ─────────────────────────────────
 def preprocess(df):
-    if 'market_value' not in df:
-        df['market_value'] = df['price_paid'] * 1.0
-    df['price_difference']       = df['price_paid'] - df['market_value']
-    df['is_overpriced']          = (df['price_difference'] / df['market_value']) > 0.3
-    df['user_transaction_count'] = df.groupby('user_id')['price_paid'].transform('count')
-    df['is_repeating_user']      = df['user_transaction_count'] > 1
-    df['is_withdrawal']          = df['type'].isin(['CASH_OUT','WITHDRAW'])
-    df['suspicious_withdrawal']  = df['is_withdrawal'] & df['is_overpriced']
-    df = df.drop(['user_id','nameDest'], axis=1, errors='ignore')
-    df = pd.get_dummies(df, columns=['type'], drop_first=True)
-    for c in features:
-        if c not in df:
-            df[c] = 0
+    if "market_value" not in df:
+        df["market_value"] = df["price_paid"] * 1.0
+    df["price_difference"]      = df["price_paid"] - df["market_value"]
+    df["is_overpriced"]         = (df["price_difference"] / df["market_value"]) > 0.3
+    df["user_transaction_count"]= df.groupby("user_id")["price_paid"].transform("count")
+    df["is_repeating_user"]     = df["user_transaction_count"] > 1
+    df["is_withdrawal"]         = df["type"].isin(["CASH_OUT","WITHDRAW"])
+    df["suspicious_withdrawal"] = df["is_withdrawal"] & df["is_overpriced"]
+    df = df.drop(["user_id","nameDest"], axis=1, errors="ignore")
+    df = pd.get_dummies(df, columns=["type"], drop_first=True)
+    for c0 in features:
+        if c0 not in df:
+            df[c0] = 0
     return df[features]
 
 def annotate(raw):
-    X      = preprocess(raw.copy())
-    pred   = model.predict(X)
-    prob   = model.predict_proba(X)[:,1].round(3)
-    thresh = X['price_paid'].quantile(0.95)
+    X     = preprocess(raw.copy())
+    pred  = model.predict(X)
+    prob  = model.predict_proba(X)[:,1].round(3)
+    thresh= X["price_paid"].quantile(0.95)
 
-    reasons = []
-    for i, r in X.iterrows():
-        if pred[i] == 0:
+    reasons=[]
+    for i,row in X.iterrows():
+        if pred[i]==0:
             reasons.append("Not suspicious")
-        elif r['suspicious_withdrawal']:
+        elif row["suspicious_withdrawal"]:
             reasons.append("Overpriced + withdrawal")
-        elif r['is_overpriced']:
+        elif row["is_overpriced"]:
             reasons.append("Price > market by 30%")
-        elif r['is_repeating_user']:
-            reasons.append(f"Repeat user ({int(r['user_transaction_count'])} txns)")
-        elif r['is_withdrawal'] and r['price_paid'] > thresh:
-            reasons.append(f"Large cash-out (>p95: {int(thresh)})")
+        elif row["is_repeating_user"]:
+            reasons.append(f"Repeat user ({int(row['user_transaction_count'])} txns)")
+        elif row["is_withdrawal"] and row["price_paid"]>thresh:
+            reasons.append(f"Large cash-out (>p95)")
         else:
-            reasons.append("Other model signal")
+            reasons.append("Other signal")
 
     out = raw.reset_index(drop=True)
-    out['is_fraud']         = pred
-    out['fraud_prob']       = prob
-    out['flag_reason']      = reasons
-    out['market_value']     = X['market_value'].values
-    out['price_difference'] = X['price_difference'].values
+    out["is_fraud"]         = pred
+    out["fraud_prob"]       = prob
+    out["flag_reason"]      = reasons
+    out["market_value"]     = X["market_value"].values
+    out["price_difference"] = X["price_difference"].values
     return out
 
-# ─── App Layout ────────────────────────────────────────────────────────────
-st.sidebar.title(f"👋 Welcome, {name}")
-if authenticator.logout("Sign out", "sidebar"):
-    st.experimental_rerun()
+# ─── 5) ADMIN DASHBOARD ────────────────────────────────────────────────────
+if page == "Admin Dashboard":
+    st.title("⚙️ Admin Dashboard")
+    st.write(f"Logged in as **{st.session_state.user}** (admin)")
 
-st.title("🏠 VR Fraud Detector Dashboard")
-st.write("Upload your transactions CSV to flag suspicious activity.")
+    st.subheader("Create new user")
+    with st.form("frm"):
+        new_u = st.text_input("Username")
+        new_p = st.text_input("Password", type="password")
+        is_a  = st.checkbox("Make admin")
+        if st.form_submit_button("➕ Add user"):
+            if new_u and new_p:
+                h = hashlib.sha256(new_p.encode()).hexdigest()
+                try:
+                    c.execute(
+                      "INSERT INTO users VALUES (?,?,?)",
+                      (new_u, h, 1 if is_a else 0)
+                    )
+                    conn.commit()
+                    st.success(f"User `{new_u}` added")
+                except sqlite3.IntegrityError:
+                    st.error("Username already exists")
 
-# --- File upload
-uploaded = st.file_uploader("Upload CSV", type="csv")
-if not uploaded:
-    st.stop()
+    st.subheader("Existing users")
+    users = c.execute("SELECT username,is_admin FROM users").fetchall()
+    df_u = pd.DataFrame(users, columns=["username","is_admin"])
+    st.dataframe(df_u)
 
-df = pd.read_csv(uploaded)
-st.write("### Raw data preview", df.head())
+    st.subheader("Upload history")
+    logs = c.execute(
+      "SELECT filename,uploaded_by,timestamp FROM uploads ORDER BY id DESC"
+    ).fetchall()
+    df_l = pd.DataFrame(logs, columns=["filename","user","when"])
+    st.dataframe(df_l)
 
-# --- Feature preview
-X_feat = preprocess(df.copy())
-st.write("### Engineered features preview", X_feat.head())
+# ─── 6) FRAUD DETECTOR ─────────────────────────────────────────────────────
+if page == "Fraud Detector":
+    st.title("🚀 VR Fraud Detector")
+    st.write(f"Welcome, **{st.session_state.user}**")
 
-# --- Annotate
-res = annotate(df)
-st.write("### Annotated results preview", res.head())
+    up = st.file_uploader("Upload CSV", type="csv")
+    if up:
+        # log it
+        c.execute(
+          "INSERT INTO uploads(filename,uploaded_by,timestamp) VALUES (?,?,?)",
+          (up.name, st.session_state.user, datetime.utcnow().isoformat())
+        )
+        conn.commit()
 
-# --- Download
-csv = res.to_csv(index=False)
-st.download_button("⬇️ Download annotated CSV", csv,
-                   "vr_fraud_with_reasons.csv","text/csv")
+        df = pd.read_csv(up)
+        st.subheader("Raw preview")
+        st.dataframe(df.head())
 
-# --- Summary calculations
-counts  = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
-rc      = res['flag_reason'].value_counts()
-top5    = rc.nlargest(5).copy()
-other   = rc.iloc[5:].sum()
-if other > 0:
-    top5['Other'] = other
+        Xf = preprocess(df.copy())
+        st.subheader("Features")
+        st.dataframe(Xf.head())
 
-total   = len(res)
-flagged = int(counts.get('Flagged', 0))
-rate    = round(100 * flagged / total, 1) if total else 0
+        res = annotate(df)
+        st.subheader("Results")
+        st.dataframe(res.head())
 
-# ─── Dashboard Metrics ────────────────────────────────────────────────────
-col1, col2, col3 = st.columns(3)
-col1.metric("Total txns",     total)
-col2.metric("Flagged txns",   flagged)
-col3.metric("Flag rate (%)", f"{rate}%")
+        st.download_button("⬇️ Download results.csv",
+            res.to_csv(index=False), "results.csv", "text/csv")
 
-st.subheader("Top 5 Flag Reasons")
-st.bar_chart(top5)
+        st.subheader("Counts")
+        cnts = res["is_fraud"].value_counts().rename({0:"Normal",1:"Flagged"})
+        st.bar_chart(cnts)
 
-st.subheader("Transaction Counts")
-st.bar_chart(counts)
+        st.subheader("Top 5 reasons")
+        rc   = res["flag_reason"].value_counts()
+        top5 = rc.nlargest(5).copy()
+        other= rc.iloc[5:].sum()
+        if other>0: top5["Not suspicious"] = other
+        st.bar_chart(top5)
 
-with st.expander("📋 View full annotated table"):
-    st.dataframe(res)
+        # summary metrics
+        tot   = len(res)
+        flg   = int(cnts.get("Flagged",0))
+        rate  = round(100*flg/tot,1)
+        avg_p = round(res["fraud_prob"].mean(),3)
+        df_m = pd.DataFrame({
+          "Metric":["Total","Flagged","Flag rate (%)","Avg prob"],
+          "Value" :[tot, flg, rate, avg_p]
+        })
+        st.table(df_m)
