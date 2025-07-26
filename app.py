@@ -9,7 +9,6 @@ def load_model():
 
 model = load_model()
 features = list(model.feature_names_in_)
-
 explainer = shap.TreeExplainer(model)
 
 def preprocess(df):
@@ -51,6 +50,7 @@ def annotate(raw):
     out['is_fraud'] = pred
     out['fraud_prob'] = prob
     out['flag_reason'] = reasons
+    # Return both the results and the feature matrix for SHAP
     return out, X
 
 st.title("VR Fraud Detector")
@@ -96,12 +96,13 @@ if up:
     st.write("### Summary metrics")
     st.table(summary)
 
-    # SHAP explainability
+    # ——— SHAP explainability ——————————————————————————
     shap_values = explainer.shap_values(X_for_shap)[1]
     flagged_inds = [i for i, v in enumerate(res['is_fraud']) if v == 1]
     if flagged_inds:
         choice = st.selectbox("Pick a flagged transaction to explain", flagged_inds)
-        row_shap = pd.Series(shap_values[choice], index=features)
+        # Use the exact feature names from X_for_shap.columns
+        row_shap = pd.Series(shap_values[choice], index=X_for_shap.columns)
         top3 = row_shap.abs().nlargest(3)
         st.write("### Why it was flagged")
         st.bar_chart(top3)
