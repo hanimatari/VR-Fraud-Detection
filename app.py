@@ -57,24 +57,25 @@ if not st.session_state.logged_in:
 
         if row and hashlib.sha256(pwd.encode()).hexdigest() == row[0]:
             st.session_state.logged_in = True
-            st.session_state.user = user
-            st.session_state.is_admin = bool(row[1])
-            st.experimental_rerun()
+            st.session_state.user      = user
+            st.session_state.is_admin  = bool(row[1])
+            # removed st.experimental_rerun() to avoid AttributeError
         else:
             st.error("❌ Invalid credentials")
     st.stop()
 
 # ─── 2) PAGE NAVIGATION ────────────────────────────────────────────────────
 if st.session_state.is_admin:
-    page = st.sidebar.selectbox("Go to", ["Admin Dashboard","Fraud Detector"])
+    page = st.sidebar.selectbox("Go to", ["Admin Dashboard", "Fraud Detector"])
 else:
     page = "Fraud Detector"
 
 # ─── 3) MODEL LOADING ─────────────────────────────────────────────────────
 @st.cache_data
 def load_model():
-    with open("model.pkl","rb") as f:
+    with open("model.pkl", "rb") as f:
         return pickle.load(f)
+
 model    = load_model()
 features = list(model.feature_names_in_)
 
@@ -82,28 +83,28 @@ features = list(model.feature_names_in_)
 def preprocess(df):
     if "market_value" not in df:
         df["market_value"] = df["price_paid"] * 1.0
-    df["price_difference"]      = df["price_paid"] - df["market_value"]
-    df["is_overpriced"]         = (df["price_difference"] / df["market_value"]) > 0.3
-    df["user_transaction_count"]= df.groupby("user_id")["price_paid"].transform("count")
-    df["is_repeating_user"]     = df["user_transaction_count"] > 1
-    df["is_withdrawal"]         = df["type"].isin(["CASH_OUT","WITHDRAW"])
-    df["suspicious_withdrawal"] = df["is_withdrawal"] & df["is_overpriced"]
-    df = df.drop(["user_id","nameDest"], axis=1, errors="ignore")
+    df["price_difference"]       = df["price_paid"] - df["market_value"]
+    df["is_overpriced"]          = (df["price_difference"] / df["market_value"]) > 0.3
+    df["user_transaction_count"] = df.groupby("user_id")["price_paid"].transform("count")
+    df["is_repeating_user"]      = df["user_transaction_count"] > 1
+    df["is_withdrawal"]          = df["type"].isin(["CASH_OUT", "WITHDRAW"])
+    df["suspicious_withdrawal"]  = df["is_withdrawal"] & df["is_overpriced"]
+    df = df.drop(["user_id", "nameDest"], axis=1, errors="ignore")
     df = pd.get_dummies(df, columns=["type"], drop_first=True)
-    for c0 in features:
-        if c0 not in df:
-            df[c0] = 0
+    for feat in features:
+        if feat not in df:
+            df[feat] = 0
     return df[features]
 
 def annotate(raw):
-    X     = preprocess(raw.copy())
-    pred  = model.predict(X)
-    prob  = model.predict_proba(X)[:,1].round(3)
-    thresh= X["price_paid"].quantile(0.95)
+    X      = preprocess(raw.copy())
+    pred   = model.predict(X)
+    prob   = model.predict_proba(X)[:,1].round(3)
+    thresh = X["price_paid"].quantile(0.95)
 
-    reasons=[]
-    for i,row in X.iterrows():
-        if pred[i]==0:
+    reasons = []
+    for i, row in X.iterrows():
+        if pred[i] == 0:
             reasons.append("Not suspicious")
         elif row["suspicious_withdrawal"]:
             reasons.append("Overpriced + withdrawal")
@@ -111,8 +112,8 @@ def annotate(raw):
             reasons.append("Price > market by 30%")
         elif row["is_repeating_user"]:
             reasons.append(f"Repeat user ({int(row['user_transaction_count'])} txns)")
-        elif row["is_withdrawal"] and row["price_paid"]>thresh:
-            reasons.append(f"Large cash-out (>p95)")
+        elif row["is_withdrawal"] and row["price_paid"] > thresh:
+            reasons.append("Large cash-out (>p95)")
         else:
             reasons.append("Other signal")
 
@@ -148,15 +149,15 @@ if page == "Admin Dashboard":
                     st.error("Username already exists")
 
     st.subheader("Existing users")
-    users = c.execute("SELECT username,is_admin FROM users").fetchall()
-    df_u = pd.DataFrame(users, columns=["username","is_admin"])
+    users = c.execute("SELECT username, is_admin FROM users").fetchall()
+    df_u = pd.DataFrame(users, columns=["username", "is_admin"])
     st.dataframe(df_u)
 
     st.subheader("Upload history")
     logs = c.execute(
-      "SELECT filename,uploaded_by,timestamp FROM uploads ORDER BY id DESC"
+      "SELECT filename, uploaded_by, timestamp FROM uploads ORDER BY id DESC"
     ).fetchall()
-    df_l = pd.DataFrame(logs, columns=["filename","user","when"])
+    df_l = pd.DataFrame(logs, columns=["filename", "user", "when"])
     st.dataframe(df_l)
 
 # ─── 6) FRAUD DETECTOR ─────────────────────────────────────────────────────
@@ -168,7 +169,7 @@ if page == "Fraud Detector":
     if up:
         # log it
         c.execute(
-          "INSERT INTO uploads(filename,uploaded_by,timestamp) VALUES (?,?,?)",
+          "INSERT INTO uploads(filename, uploaded_by, timestamp) VALUES (?,?,?)",
           (up.name, st.session_state.user, datetime.utcnow().isoformat())
         )
         conn.commit()
@@ -185,27 +186,32 @@ if page == "Fraud Detector":
         st.subheader("Results")
         st.dataframe(res.head())
 
-        st.download_button("⬇️ Download results.csv",
-            res.to_csv(index=False), "results.csv", "text/csv")
+        st.download_button(
+            "⬇️ Download results.csv",
+            res.to_csv(index=False),
+            "results.csv",
+            "text/csv"
+        )
 
         st.subheader("Counts")
-        cnts = res["is_fraud"].value_counts().rename({0:"Normal",1:"Flagged"})
+        cnts = res["is_fraud"].value_counts().rename({0: "Normal", 1: "Flagged"})
         st.bar_chart(cnts)
 
         st.subheader("Top 5 reasons")
-        rc   = res["flag_reason"].value_counts()
-        top5 = rc.nlargest(5).copy()
-        other= rc.iloc[5:].sum()
-        if other>0: top5["Not suspicious"] = other
+        rc    = res["flag_reason"].value_counts()
+        top5  = rc.nlargest(5).copy()
+        other = rc.iloc[5:].sum()
+        if other > 0:
+            top5["Not suspicious"] = other
         st.bar_chart(top5)
 
-        # summary metrics
+        st.subheader("Summary metrics")
         tot   = len(res)
-        flg   = int(cnts.get("Flagged",0))
-        rate  = round(100*flg/tot,1)
-        avg_p = round(res["fraud_prob"].mean(),3)
-        df_m = pd.DataFrame({
-          "Metric":["Total","Flagged","Flag rate (%)","Avg prob"],
-          "Value" :[tot, flg, rate, avg_p]
+        flg   = int(cnts.get("Flagged", 0))
+        rate  = round(100 * flg / tot, 1)
+        avg_p = round(res["fraud_prob"].mean(), 3)
+        df_m  = pd.DataFrame({
+          "Metric": ["Total", "Flagged", "Flag rate (%)", "Avg prob"],
+          "Value" : [tot, flg, rate, avg_p]
         })
         st.table(df_m)
