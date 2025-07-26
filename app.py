@@ -1,18 +1,31 @@
 import streamlit as st
 import pandas as pd
 import pickle
-import openai
-import traceback
+import yaml
+import streamlit_authenticator as stauth
 
-# ─── DEBUG: confirm client & key ──────────────────────────────────────────
-import openai, streamlit as st  # make sure these are at top of file
-st.write("⚙️ openai version:", openai.__version__)
-st.write("🔑 API key loaded:", bool(openai.api_key))
+# ─── Auth Setup ────────────────────────────────────────────────────────────
+with open('config.yaml') as file:
+    config = yaml.safe_load(file)
 
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config.get('preauthorized', {})
+)
 
-# ─── Config ────────────────────────────────────────────────────────────────
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+name, auth_status, username = authenticator.login('Login', 'main')
+if auth_status != True:
+    if auth_status is None:
+        st.warning("Please enter your username and password")
+    else:
+        st.error("Username/password incorrect")
+    st.stop()
 
+# ─── Model Loading ─────────────────────────────────────────────────────────
+@st.cache_data
 def load_model():
     with open('model.pkl', 'rb') as f:
         return pickle.load(f)
@@ -66,76 +79,58 @@ def annotate(raw):
     out['price_difference'] = X['price_difference'].values
     return out
 
-# ─── Streamlit App ────────────────────────────────────────────────────────
-st.title("VR Fraud Detector")
-st.write("Upload your transactions CSV, get flags + an AI‐generated summary.")
+# ─── App Layout ────────────────────────────────────────────────────────────
+st.sidebar.title(f"👋 Welcome, {name}")
+if authenticator.logout("Sign out", "sidebar"):
+    st.experimental_rerun()
 
-up = st.file_uploader("Upload CSV", type="csv")
-if not up:
+st.title("🏠 VR Fraud Detector Dashboard")
+st.write("Upload your transactions CSV to flag suspicious activity.")
+
+# --- File upload
+uploaded = st.file_uploader("Upload CSV", type="csv")
+if not uploaded:
     st.stop()
 
-df = pd.read_csv(up)
+df = pd.read_csv(uploaded)
 st.write("### Raw data preview", df.head())
 
-# Features & results
+# --- Feature preview
 X_feat = preprocess(df.copy())
 st.write("### Engineered features preview", X_feat.head())
 
+# --- Annotate
 res = annotate(df)
 st.write("### Annotated results preview", res.head())
 
-# Download
+# --- Download
 csv = res.to_csv(index=False)
 st.download_button("⬇️ Download annotated CSV", csv,
                    "vr_fraud_with_reasons.csv","text/csv")
 
-# Summary charts
-counts = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
-st.write("### Transaction counts")
-st.bar_chart(counts)
+# --- Summary calculations
+counts  = res['is_fraud'].value_counts().rename({0:'Normal',1:'Flagged'})
+rc      = res['flag_reason'].value_counts()
+top5    = rc.nlargest(5).copy()
+other   = rc.iloc[5:].sum()
+if other > 0:
+    top5['Other'] = other
 
-rc   = res['flag_reason'].value_counts()
-top5 = rc.nlargest(5).copy()
-other = rc.iloc[5:].sum()
-if other>0: top5['Other'] = other
-st.write("### Top 5 flag reasons")
+total   = len(res)
+flagged = int(counts.get('Flagged', 0))
+rate    = round(100 * flagged / total, 1) if total else 0
+
+# ─── Dashboard Metrics ────────────────────────────────────────────────────
+col1, col2, col3 = st.columns(3)
+col1.metric("Total txns",     total)
+col2.metric("Flagged txns",   flagged)
+col3.metric("Flag rate (%)", f"{rate}%")
+
+st.subheader("Top 5 Flag Reasons")
 st.bar_chart(top5)
 
-total  = len(res)
-flagged= int(counts.get('Flagged',0))
-rate   = round(100*flagged/total,1) if total else 0
-avgp   = round(res['fraud_prob'].mean(),3)
-summary = pd.DataFrame({
-    'Metric':['Total txns','Flagged txns','Flag rate (%)','Avg fraud_prob'],
-    'Value' :[total, flagged, rate, avgp]
-})
-st.write("### Summary metrics")
-st.table(summary)
+st.subheader("Transaction Counts")
+st.bar_chart(counts)
 
-# ─── AI‐Generated Narrative via Chat API ────────────────────────────────
-st.write("## AI Insight Summary")
-
-prompt = (
-    f"I have {total} virtual-reality asset transactions. "
-    f"{flagged} were flagged as potentially fraudulent. "
-    f"The top reasons are: {', '.join(top5.index.tolist())}. "
-    "Write a concise 3-sentence summary for a risk officer."
-)
-
-# (optional) show the prompt
-st.text("🔍 Prompt:")
-st.code(prompt, language="")
-
-try:
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role":"user","content": prompt}],
-        max_tokens=150,
-        temperature=0.7,
-    )
-    summary_text = response.choices[0].message.content.strip()
-    st.markdown(f"> {summary_text}")
-
-except Exception as e:
-    st.error(f"⚠️ OpenAI call failed: {type(e).__name__}: {e}")
-    import traceback; st.text(traceback.format_exc())
+with st.expander("📋 View full annotated table"):
+    st.dataframe(res)
