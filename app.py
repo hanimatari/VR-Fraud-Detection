@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import pickle
+import shap
 
 def load_model():
     with open('model.pkl', 'rb') as f:
@@ -8,6 +9,8 @@ def load_model():
 
 model = load_model()
 features = list(model.feature_names_in_)
+
+explainer = shap.TreeExplainer(model)
 
 def preprocess(df):
     if 'market_value' not in df:
@@ -41,14 +44,14 @@ def annotate(raw):
         elif row['repeat_user']:
             reasons.append(f"Repeat user ({int(row['trans_count'])} txns)")
         elif row['withdraw'] and row['price_paid'] > thresh:
-            reasons.append(f"Large cash‐out (>p95: {int(thresh)})")
+            reasons.append(f"Large cash-out (>p95: {int(thresh)})")
         else:
             reasons.append("Other model signal")
     out = raw.reset_index(drop=True)
     out['is_fraud'] = pred
     out['fraud_prob'] = prob
     out['flag_reason'] = reasons
-    return out
+    return out, X
 
 st.title("VR Fraud Detector")
 up = st.file_uploader("Upload CSV", type="csv")
@@ -57,10 +60,10 @@ if up:
     df = pd.read_csv(up)
     st.write("Raw data", df.head())
 
-    X = preprocess(df.copy())
-    st.write("Features", X.head())
+    X_feat = preprocess(df.copy())
+    st.write("Features", X_feat.head())
 
-    res = annotate(df)
+    res, X_for_shap = annotate(df)
     st.write("Results", res.head())
 
     st.download_button(
@@ -92,3 +95,15 @@ if up:
     })
     st.write("### Summary metrics")
     st.table(summary)
+
+    # SHAP explainability
+    shap_values = explainer.shap_values(X_for_shap)[1]
+    flagged_inds = [i for i, v in enumerate(res['is_fraud']) if v == 1]
+    if flagged_inds:
+        choice = st.selectbox("Pick a flagged transaction to explain", flagged_inds)
+        row_shap = pd.Series(shap_values[choice], index=features)
+        top3 = row_shap.abs().nlargest(3)
+        st.write("### Why it was flagged")
+        st.bar_chart(top3)
+    else:
+        st.write("No flagged transactions to explain.")
