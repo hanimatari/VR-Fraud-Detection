@@ -6,11 +6,9 @@ import hashlib
 from datetime import datetime
 
 # ─── 0) DB SETUP ──────────────────────────────────────────────────────────
-# create (or open) a local file `data.db` to hold users & uploads logs
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
-# users table: username (PK), password_hash, is_admin flag
 c.execute("""
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
@@ -18,8 +16,6 @@ CREATE TABLE IF NOT EXISTS users (
   is_admin INTEGER
 )
 """)
-
-# uploads table: auto-id, filename, who, when
 c.execute("""
 CREATE TABLE IF NOT EXISTS uploads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +26,7 @@ CREATE TABLE IF NOT EXISTS uploads (
 """)
 conn.commit()
 
-# If no users exist yet, bootstrap a default admin
+# bootstrap default admin
 if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
     default_pw = "admin123"
     h = hashlib.sha256(default_pw.encode()).hexdigest()
@@ -48,34 +44,38 @@ if not st.session_state.logged_in:
     st.title("🔐 VR Fraud Detector — Login")
     user = st.text_input("Username")
     pwd  = st.text_input("Password", type="password")
-
     if st.button("Log in"):
         row = c.execute(
           "SELECT password_hash, is_admin FROM users WHERE username=?",
           (user,)
         ).fetchone()
-
         if row and hashlib.sha256(pwd.encode()).hexdigest() == row[0]:
             st.session_state.logged_in = True
             st.session_state.user      = user
             st.session_state.is_admin  = bool(row[1])
-            # removed st.experimental_rerun() to avoid AttributeError
+            st.experimental_rerun()
         else:
             st.error("❌ Invalid credentials")
     st.stop()
 
-# ─── 2) PAGE NAVIGATION ────────────────────────────────────────────────────
+# ─── LOGOUT BUTTON ────────────────────────────────────────────────────────
+with st.sidebar:
+    if st.button("🔒 Log out"):
+        for k in ["logged_in","user","is_admin"]:
+            st.session_state.pop(k, None)
+        st.experimental_rerun()
+
+# ─── 2) PAGE NAVIGATION ───────────────────────────────────────────────────
 if st.session_state.is_admin:
-    page = st.sidebar.selectbox("Go to", ["Admin Dashboard", "Fraud Detector"])
+    page = st.sidebar.selectbox("Go to", ["Admin Dashboard","Fraud Detector"])
 else:
     page = "Fraud Detector"
 
 # ─── 3) MODEL LOADING ─────────────────────────────────────────────────────
 @st.cache_data
 def load_model():
-    with open("model.pkl", "rb") as f:
+    with open("model.pkl","rb") as f:
         return pickle.load(f)
-
 model    = load_model()
 features = list(model.feature_names_in_)
 
@@ -84,12 +84,12 @@ def preprocess(df):
     if "market_value" not in df:
         df["market_value"] = df["price_paid"] * 1.0
     df["price_difference"]       = df["price_paid"] - df["market_value"]
-    df["is_overpriced"]          = (df["price_difference"] / df["market_value"]) > 0.3
+    df["is_overpriced"]          = (df["price_difference"]/df["market_value"]) > 0.3
     df["user_transaction_count"] = df.groupby("user_id")["price_paid"].transform("count")
     df["is_repeating_user"]      = df["user_transaction_count"] > 1
-    df["is_withdrawal"]          = df["type"].isin(["CASH_OUT", "WITHDRAW"])
+    df["is_withdrawal"]          = df["type"].isin(["CASH_OUT","WITHDRAW"])
     df["suspicious_withdrawal"]  = df["is_withdrawal"] & df["is_overpriced"]
-    df = df.drop(["user_id", "nameDest"], axis=1, errors="ignore")
+    df = df.drop(["user_id","nameDest"], axis=1, errors="ignore")
     df = pd.get_dummies(df, columns=["type"], drop_first=True)
     for feat in features:
         if feat not in df:
@@ -125,7 +125,7 @@ def annotate(raw):
     out["price_difference"] = X["price_difference"].values
     return out
 
-# ─── 5) ADMIN DASHBOARD ────────────────────────────────────────────────────
+# ─── 5) ADMIN DASHBOARD ───────────────────────────────────────────────────
 if page == "Admin Dashboard":
     st.title("⚙️ Admin Dashboard")
     st.write(f"Logged in as **{st.session_state.user}** (admin)")
@@ -140,25 +140,26 @@ if page == "Admin Dashboard":
                 h = hashlib.sha256(new_p.encode()).hexdigest()
                 try:
                     c.execute(
-                      "INSERT INTO users VALUES (?,?,?)",
+                      "INSERT INTO users(username,password_hash,is_admin) VALUES (?,?,?)",
                       (new_u, h, 1 if is_a else 0)
                     )
                     conn.commit()
                     st.success(f"User `{new_u}` added")
+                    st.experimental_rerun()
                 except sqlite3.IntegrityError:
                     st.error("Username already exists")
 
     st.subheader("Existing users")
     users = c.execute("SELECT username, is_admin FROM users").fetchall()
-    df_u = pd.DataFrame(users, columns=["username", "is_admin"])
-    st.dataframe(df_u)
+    df_u = pd.DataFrame(users, columns=["username","is_admin"])
+    st.dataframe(df_u, use_container_width=True)
 
     st.subheader("Upload history")
     logs = c.execute(
       "SELECT filename, uploaded_by, timestamp FROM uploads ORDER BY id DESC"
     ).fetchall()
-    df_l = pd.DataFrame(logs, columns=["filename", "user", "when"])
-    st.dataframe(df_l)
+    df_l = pd.DataFrame(logs, columns=["filename","user","when"])
+    st.dataframe(df_l, use_container_width=True)
 
 # ─── 6) FRAUD DETECTOR ─────────────────────────────────────────────────────
 if page == "Fraud Detector":
@@ -167,24 +168,23 @@ if page == "Fraud Detector":
 
     up = st.file_uploader("Upload CSV", type="csv")
     if up:
-        # log it
         c.execute(
-          "INSERT INTO uploads(filename, uploaded_by, timestamp) VALUES (?,?,?)",
+          "INSERT INTO uploads(filename,uploaded_by,timestamp) VALUES (?,?,?)",
           (up.name, st.session_state.user, datetime.utcnow().isoformat())
         )
         conn.commit()
 
         df = pd.read_csv(up)
         st.subheader("Raw preview")
-        st.dataframe(df.head())
+        st.dataframe(df.head(), use_container_width=True)
 
         Xf = preprocess(df.copy())
         st.subheader("Features")
-        st.dataframe(Xf.head())
+        st.dataframe(Xf.head(), use_container_width=True)
 
         res = annotate(df)
         st.subheader("Results")
-        st.dataframe(res.head())
+        st.dataframe(res.head(), use_container_width=True)
 
         st.download_button(
             "⬇️ Download results.csv",
@@ -194,24 +194,24 @@ if page == "Fraud Detector":
         )
 
         st.subheader("Counts")
-        cnts = res["is_fraud"].value_counts().rename({0: "Normal", 1: "Flagged"})
+        cnts = res["is_fraud"].value_counts().rename({0:"Normal",1:"Flagged"})
         st.bar_chart(cnts)
 
         st.subheader("Top 5 reasons")
         rc    = res["flag_reason"].value_counts()
         top5  = rc.nlargest(5).copy()
         other = rc.iloc[5:].sum()
-        if other > 0:
+        if other>0:
             top5["Not suspicious"] = other
         st.bar_chart(top5)
 
         st.subheader("Summary metrics")
         tot   = len(res)
-        flg   = int(cnts.get("Flagged", 0))
-        rate  = round(100 * flg / tot, 1)
-        avg_p = round(res["fraud_prob"].mean(), 3)
+        flg   = int(cnts.get("Flagged",0))
+        rate  = round(100*flg/tot,1)
+        avg_p = round(res["fraud_prob"].mean(),3)
         df_m  = pd.DataFrame({
-          "Metric": ["Total", "Flagged", "Flag rate (%)", "Avg prob"],
+          "Metric": ["Total","Flagged","Flag rate (%)","Avg prob"],
           "Value" : [tot, flg, rate, avg_p]
         })
         st.table(df_m)
