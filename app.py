@@ -5,6 +5,7 @@ import sqlite3
 import hashlib
 from datetime import datetime
 from PIL import Image
+import base64  # added for image encoding
 
 # ─── 0) DB SETUP ──────────────────────────────────────────────────────────
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -39,16 +40,35 @@ if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+def get_image_base64(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
 if not st.session_state.logged_in:
-    # Load and display logo
-    logo_path = "cash_catchers_logo.jpeg"  # Ensure file exists in the same folder
+    # Display logo above
+    logo_path = "cash_catchers_logo.jpeg"
     try:
         logo = Image.open(logo_path)
         st.image(logo, width=200)
     except:
-        st.warning("Logo not found. Make sure 'cash_catchers_logo.png' exists.")
+        st.warning("Logo not found. Make sure 'cash_catchers_logo.jpeg' exists.")
 
-    st.title("🔐 VR Fraud Detector — Login")
+    # Title with embedded logo instead of lock emoji
+    try:
+        logo_base64 = get_image_base64(logo_path)
+        st.markdown(
+            f"""
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <img src="data:image/jpeg;base64,{logo_base64}" width="40" style="margin-bottom: 6px;">
+                <h1 style="margin: 0;">VR Fraud Detector — Login</h1>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except:
+        st.title("VR Fraud Detector — Login")
+
     user = st.text_input("Username")
     pwd  = st.text_input("Password", type="password")
     if st.button("Log in"):
