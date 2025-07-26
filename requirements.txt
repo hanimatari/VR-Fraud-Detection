@@ -4,6 +4,4 @@ scikit-learn
 xgboost
 matplotlib
 streamlit
-pyyaml
-streamlit-authenticator==0.5.3
-bcrypt
+
