@@ -115,10 +115,11 @@ prompt = (
 )
 
 response = openai.Completion.create(
-    engine="text-davinci-003",
+    model="text-davinci-003",
     prompt=prompt,
     max_tokens=150,
     temperature=0.7,
 )
 summary_text = response.choices[0].text.strip()
 st.markdown(f"> {summary_text}")
+
