@@ -3,5 +3,5 @@ numpy
 scikit-learn
 xgboost
 matplotlib
-streamlit
+streamlit==1.12.0
 
