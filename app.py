@@ -3,6 +3,12 @@ import pandas as pd
 import pickle
 import openai
 
+# DEBUGGING: confirm client version & key
+import openai, streamlit as st
+st.write("⚙️ openai version:", openai.__version__)
+st.write("🔑 API key loaded:", bool(openai.api_key))
+
+
 # ─── Config ────────────────────────────────────────────────────────────────
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
